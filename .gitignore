@@ -13,3 +13,18 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+
+.idea
+.DS_Store
+
+# execuable file
+bin
+
+# package
+*.tar.gz
+
+# excel
+*.xlsx
+
+# log
+logs
