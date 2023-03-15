@@ -17,6 +17,12 @@ type tableInfo struct {
 	size     int
 }
 
+type errorTableInfo struct {
+	db   string
+	name string
+	err  error
+}
+
 var (
 	zookeeperQuorum = "common1:2181,common2:2181,common3:2181"
 	username        = "ods"
@@ -44,22 +50,23 @@ func main() {
 	cursor := connect.Cursor()
 	defer cursor.Close()
 
-	tableInfos, err := fetch(cursor)
+	tableInfos, errorTableInfos, err := fetch(cursor)
 	if err != nil {
 		log.Fatal(fmt.Sprintf("%+v", err))
 	}
 
 	fmt.Println(fmt.Sprintf("%+v", tableInfos))
+	fmt.Println(fmt.Sprintf("%+v", errorTableInfos))
 }
 
-func fetch(cursor *gohive.Cursor) (tableInfos []tableInfo, err error) {
+func fetch(cursor *gohive.Cursor) (tableInfos []tableInfo, errorTableInfos []errorTableInfo, err error) {
 	var (
 		ctx = context.Background()
 	)
 
 	dbs, err := listDbs(ctx, cursor)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	for _, db := range dbs {
@@ -69,14 +76,22 @@ func fetch(cursor *gohive.Cursor) (tableInfos []tableInfo, err error) {
 
 		tables, err := listTables(ctx, cursor, db)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		for _, table := range tables {
 			location, err := getLocation(ctx, cursor, db, table)
 			if err != nil {
-				return nil, err
+				errorTableInfos = append(errorTableInfos, errorTableInfo{
+					db:   db,
+					name: table,
+					err:  err,
+				})
+				continue
 			}
+
+			// todo 获取大小
+
 			tableInfos = append(tableInfos, tableInfo{
 				db:       db,
 				name:     table,
@@ -164,6 +179,10 @@ func getLocation(ctx context.Context, cursor *gohive.Cursor, db, table string) (
 	}
 
 	location = strings.Split(location, "'")[1]
+	return
+}
+
+func getSize(path string) (size int, err error) {
 	return
 }
 
