@@ -11,18 +11,22 @@ import (
 	"strings"
 )
 
-type tableInfo struct {
+type hiveTableStorageInfo struct {
 	db       string
-	name     string
+	table    string
 	location string
-	size     int
+	size     int64
+	desc     string
 }
 
-type errorTableInfo struct {
-	db   string
-	name string
-	err  error
+func (info *hiveTableStorageInfo) String() string {
+	return fmt.Sprintf("Database: %s\nTable: %s\nLocation: %s\nSize: %d bytes\nDescription: %s",
+		info.db, info.table, info.location, info.size, info.desc)
 }
+
+const (
+	hdfsFlag = "hdfs://"
+)
 
 var (
 	// hive
@@ -34,13 +38,14 @@ var (
 	hadoopConfDir = "/etc/hadoop/conf"
 	hdfsUsername  = "ods"
 
+	// filter
 	dbBlackList = []string{
 		"stg_stream",
 	}
 )
 
-// todo 添加请求的 retry
-// todo 改为多线程
+// TODO 添加错误请求的 retry
+// TODO 改为多线程
 
 func main() {
 	// hive
@@ -71,25 +76,44 @@ func main() {
 	if err != nil {
 		log.Fatal("创建 hdfs 客户端错误: " + err.Error())
 	}
+	defer hdfsClient.Close()
 
 	// fetch
-	tableInfos, errorTableInfos, err := fetch(hiveCursor, hdfsClient)
+	var infos = make(chan *hiveTableStorageInfo)
+
+	err = fetch(infos, hiveCursor)
 	if err != nil {
 		log.Fatal(fmt.Sprintf("%+v", err))
 	}
 
-	fmt.Println(fmt.Sprintf("%+v", tableInfos))
-	fmt.Println(fmt.Sprintf("%+v", errorTableInfos))
+	for info := range infos {
+		if strings.Contains(info.location, hdfsFlag) {
+			size, err := getHdfsSize(hdfsClient, info.location)
+			if err != nil {
+				info.size = -1
+				info.desc = err.Error()
+				continue
+			}
+			info.size = size
+		}
+	}
+
+	for info := range infos {
+		fmt.Println(info)
+		fmt.Println()
+	}
 }
 
-func fetch(hiveCursor *gohive.Cursor, hdfsClient *hdfs.Client) (tableInfos []tableInfo, errorTableInfos []errorTableInfo, err error) {
+func fetch(infos chan<- *hiveTableStorageInfo, hiveCursor *gohive.Cursor) error {
+	defer close(infos)
+
 	var (
 		ctx = context.Background()
 	)
 
 	dbs, err := listDbs(ctx, hiveCursor)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 
 	for _, db := range dbs {
@@ -99,32 +123,31 @@ func fetch(hiveCursor *gohive.Cursor, hdfsClient *hdfs.Client) (tableInfos []tab
 
 		tables, err := listTables(ctx, hiveCursor, db)
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
 
 		for _, table := range tables {
 			location, err := getLocation(ctx, hiveCursor, db, table)
 			if err != nil {
-				errorTableInfos = append(errorTableInfos, errorTableInfo{
-					db:   db,
-					name: table,
-					err:  err,
-				})
+				infos <- &hiveTableStorageInfo{
+					db:       db,
+					table:    table,
+					location: "",
+					size:     -1,
+					desc:     err.Error(),
+				}
 				continue
 			}
 
-			// todo 获取大小
-
-			tableInfos = append(tableInfos, tableInfo{
+			infos <- &hiveTableStorageInfo{
 				db:       db,
-				name:     table,
+				table:    table,
 				location: location,
-				size:     0,
-			})
+			}
 		}
 	}
 
-	return
+	return nil
 }
 
 func listDbs(ctx context.Context, cursor *gohive.Cursor) (dbs []string, err error) {
@@ -197,7 +220,7 @@ func getLocation(ctx context.Context, cursor *gohive.Cursor, db, table string) (
 	}
 
 	if location == "" {
-		err = errors.New("have no location")
+		err = failure.Wrap(errors.New("have no location"))
 		return
 	}
 
@@ -205,8 +228,21 @@ func getLocation(ctx context.Context, cursor *gohive.Cursor, db, table string) (
 	return
 }
 
-func getSize(path string) (size int, err error) {
+func getHdfsSize(client *hdfs.Client, location string) (size int64, err error) {
+	path := parseHdfsLocation(location)
+	summary, err := client.GetContentSummary(path)
+	if err != nil {
+		err = failure.Wrap(err)
+		return
+	}
+	size = summary.Size()
+	fmt.Println(size)
 	return
+}
+
+func parseHdfsLocation(location string) string {
+	// TODO 这里现在返回的是 path，后续还可以解析出来 hdfs 集群名称
+	return "/" + strings.SplitN(strings.Split(location, hdfsFlag)[1], "/", 2)[1]
 }
 
 func inBlackList(db string) bool {
