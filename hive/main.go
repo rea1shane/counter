@@ -79,14 +79,14 @@ func main() {
 	defer hdfsClient.Close()
 
 	// fetch
-	var infos = make(chan *hiveTableStorageInfo)
+	var infos []*hiveTableStorageInfo
 
 	err = fetch(infos, hiveCursor)
 	if err != nil {
 		log.Fatal(fmt.Sprintf("%+v", err))
 	}
 
-	for info := range infos {
+	for _, info := range infos {
 		if strings.Contains(info.location, hdfsFlag) {
 			size, err := getHdfsSize(hdfsClient, info.location)
 			if err != nil {
@@ -98,15 +98,13 @@ func main() {
 		}
 	}
 
-	for info := range infos {
+	for _, info := range infos {
 		fmt.Println(info)
 		fmt.Println()
 	}
 }
 
-func fetch(infos chan<- *hiveTableStorageInfo, hiveCursor *gohive.Cursor) error {
-	defer close(infos)
-
+func fetch(infos []*hiveTableStorageInfo, hiveCursor *gohive.Cursor) error {
 	var (
 		ctx = context.Background()
 	)
@@ -129,21 +127,21 @@ func fetch(infos chan<- *hiveTableStorageInfo, hiveCursor *gohive.Cursor) error 
 		for _, table := range tables {
 			location, err := getLocation(ctx, hiveCursor, db, table)
 			if err != nil {
-				infos <- &hiveTableStorageInfo{
+				infos = append(infos, &hiveTableStorageInfo{
 					db:       db,
 					table:    table,
 					location: "",
 					size:     -1,
 					desc:     err.Error(),
-				}
+				})
 				continue
 			}
 
-			infos <- &hiveTableStorageInfo{
+			infos = append(infos, &hiveTableStorageInfo{
 				db:       db,
 				table:    table,
 				location: location,
-			}
+			})
 		}
 	}
 
