@@ -7,21 +7,23 @@ import (
 	"github.com/beltran/gohive"
 	"github.com/colinmarc/hdfs"
 	"github.com/morikuni/failure"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
 	"log"
 	"strings"
 )
 
-type hiveTableStorageInfo struct {
-	db       string
-	table    string
-	location string
-	size     int64
-	desc     string
+type Hive struct {
+	Db       string
+	Table    string
+	Location string
+	Size     int64
+	Desc     string
 }
 
-func (info *hiveTableStorageInfo) String() string {
+func (h *Hive) String() string {
 	return fmt.Sprintf("Database: %s\nTable: %s\nLocation: %s\nSize: %d bytes\nDescription: %s",
-		info.db, info.table, info.location, info.size, info.desc)
+		h.Db, h.Table, h.Location, h.Size, h.Desc)
 }
 
 const (
@@ -38,13 +40,16 @@ var (
 	hadoopConfDir = "/etc/hadoop/conf"
 	hdfsUsername  = "ods"
 
+	// mysql
+	mysqlDsn = ""
+
 	// filter
 	dbBlackList = []string{
 		"stg_stream",
 	}
 )
 
-// TODO 添加错误请求的 retry
+// TODO 添加失败请求的 retry
 // TODO 改为多线程
 
 func main() {
@@ -55,7 +60,7 @@ func main() {
 
 	hiveConnection, err := gohive.ConnectZookeeper(hiveZookeeperQuorum, "NONE", hiveConnectConfiguration)
 	if err != nil {
-		log.Fatal("创建 hive 连接错误: " + err.Error())
+		log.Fatal("创建 hive 连接失败: " + err.Error())
 	}
 	defer hiveConnection.Close()
 
@@ -66,7 +71,7 @@ func main() {
 	hadoopConf := hdfs.LoadHadoopConf(hadoopConfDir)
 	namenodes, err := hadoopConf.Namenodes()
 	if err != nil {
-		log.Fatal("获取 NameNode 列表错误: " + err.Error())
+		log.Fatal("获取 NameNode 列表失败: " + err.Error())
 	}
 
 	hdfsClient, err := hdfs.NewClient(hdfs.ClientOptions{
@@ -74,38 +79,48 @@ func main() {
 		User:      hdfsUsername,
 	})
 	if err != nil {
-		log.Fatal("创建 hdfs 客户端错误: " + err.Error())
+		log.Fatal("创建 hdfs 客户端失败: " + err.Error())
 	}
 	defer hdfsClient.Close()
 
+	// mysql
+	db, err := gorm.Open(mysql.Open(mysqlDsn), &gorm.Config{})
+	if err != nil {
+		log.Fatal("创建 MySQL 连接失败: " + err.Error())
+	}
+	err = db.AutoMigrate(&Hive{})
+	if err != nil {
+		log.Fatal("自动创建 MySQL 表失败: " + err.Error())
+	}
+
 	// fetch
-	infos, err := fetch(hiveCursor)
+	entities, err := fetch(hiveCursor)
 	if err != nil {
 		log.Fatal(fmt.Sprintf("%+v", err))
 	}
 
-	for _, info := range infos {
-		if strings.Contains(info.location, hdfsFlag) {
-			size, err := getHdfsSize(hdfsClient, info.location)
+	for _, entity := range entities {
+		if strings.Contains(entity.Location, hdfsFlag) {
+			size, err := getHdfsSize(hdfsClient, entity.Location)
 			if err != nil {
-				info.size = -1
-				info.desc = err.Error()
+				entity.Size = -1
+				entity.Desc = err.Error()
 				continue
 			}
-			info.size = size
+			entity.Size = size
 		}
 	}
 
-	for _, info := range infos {
-		fmt.Println(info)
+	for _, entity := range entities {
+		fmt.Println(entity)
 		fmt.Println()
 	}
 }
 
-func fetch(hiveCursor *gohive.Cursor) ([]*hiveTableStorageInfo, error) {
+func fetch(hiveCursor *gohive.Cursor) ([]*Hive, error) {
 	var (
-		infos []*hiveTableStorageInfo
-		ctx   = context.Background()
+		entities []*Hive
+		ctx      = context.Background()
 	)
 
 	dbs, err := listDbs(ctx, hiveCursor)
@@ -126,25 +141,25 @@ func fetch(hiveCursor *gohive.Cursor) ([]*hiveTableStorageInfo, error) {
 		for _, table := range tables {
 			location, err := getLocation(ctx, hiveCursor, db, table)
 			if err != nil {
-				infos = append(infos, &hiveTableStorageInfo{
-					db:       db,
-					table:    table,
-					location: "",
-					size:     -1,
-					desc:     err.Error(),
+				entities = append(entities, &Hive{
+					Db:       db,
+					Table:    table,
+					Location: "",
+					Size:     -1,
+					Desc:     err.Error(),
 				})
 				continue
 			}
 
-			infos = append(infos, &hiveTableStorageInfo{
-				db:       db,
-				table:    table,
-				location: location,
+			entities = append(entities, &Hive{
+				Db:       db,
+				Table:    table,
+				Location: location,
 			})
 		}
 	}
 
-	return infos, err
+	return entities, err
 }
 
 func listDbs(ctx context.Context, cursor *gohive.Cursor) (dbs []string, err error) {
