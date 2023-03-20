@@ -79,9 +79,7 @@ func main() {
 	defer hdfsClient.Close()
 
 	// fetch
-	var infos []*hiveTableStorageInfo
-
-	err = fetch(infos, hiveCursor)
+	infos, err := fetch(hiveCursor)
 	if err != nil {
 		log.Fatal(fmt.Sprintf("%+v", err))
 	}
@@ -104,14 +102,15 @@ func main() {
 	}
 }
 
-func fetch(infos []*hiveTableStorageInfo, hiveCursor *gohive.Cursor) error {
+func fetch(hiveCursor *gohive.Cursor) ([]*hiveTableStorageInfo, error) {
 	var (
-		ctx = context.Background()
+		infos []*hiveTableStorageInfo
+		ctx   = context.Background()
 	)
 
 	dbs, err := listDbs(ctx, hiveCursor)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	for _, db := range dbs {
@@ -121,7 +120,7 @@ func fetch(infos []*hiveTableStorageInfo, hiveCursor *gohive.Cursor) error {
 
 		tables, err := listTables(ctx, hiveCursor, db)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		for _, table := range tables {
@@ -145,7 +144,7 @@ func fetch(infos []*hiveTableStorageInfo, hiveCursor *gohive.Cursor) error {
 		}
 	}
 
-	return nil
+	return infos, err
 }
 
 func listDbs(ctx context.Context, cursor *gohive.Cursor) (dbs []string, err error) {
@@ -240,7 +239,7 @@ func getHdfsSize(client *hdfs.Client, location string) (size int64, err error) {
 
 func parseHdfsLocation(location string) string {
 	// TODO 这里现在返回的是 path，后续还可以解析出来 hdfs 集群名称
-	return "/" + strings.SplitN(strings.Split(location, hdfsFlag)[1], "/", 2)[1]
+	return "/" + strings.SplitN(strings.Split(location, hdfsFlag)[1], "/", 2)[1] + "/"
 }
 
 func inBlackList(db string) bool {
