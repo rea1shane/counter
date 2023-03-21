@@ -6,6 +6,7 @@ require (
 	github.com/beltran/gohive v1.5.4
 	github.com/colinmarc/hdfs v1.1.3
 	github.com/morikuni/failure v1.1.2
+	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.4.7
 	gorm.io/gorm v1.24.6
 )
