@@ -7,11 +7,38 @@ import (
 	"github.com/beltran/gohive"
 	"github.com/colinmarc/hdfs"
 	"github.com/morikuni/failure"
+	"gopkg.in/yaml.v3"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"io/ioutil"
 	"log"
 	"strings"
+	"time"
 )
+
+type Config struct {
+	Hive struct {
+		Username  string `yaml:"username"`
+		Password  string `yaml:"password"`
+		Zookeeper struct {
+			Quorum string `yaml:"quorum"`
+		} `yaml:"zookeeper"`
+	} `yaml:"hive"`
+	Hdfs struct {
+		Username string `yaml:"username"`
+	} `yaml:"hdfs"`
+	Hadoop struct {
+		Conf struct {
+			Dir string `yaml:"dir"`
+		} `yaml:"conf"`
+	} `yaml:"hadoop"`
+	Mysql struct {
+		Dsn string `yaml:"dsn"`
+	} `yaml:"mysql"`
+	Blacklist struct {
+		Db []string `yaml:"db"`
+	} `yaml:"blacklist"`
+}
 
 type Hive struct {
 	Db       string
@@ -19,6 +46,11 @@ type Hive struct {
 	Location string
 	Size     int64
 	Desc     string
+	Date     time.Time
+}
+
+func (Hive) TableName() string {
+	return "hive"
 }
 
 func (h *Hive) String() string {
@@ -31,34 +63,41 @@ const (
 )
 
 var (
-	// hive
-	hiveZookeeperQuorum = "common1:2181,common2:2181,common3:2181"
-	hiveUsername        = "ods"
-	hivePassword        = ""
-
-	// hdfs
-	hadoopConfDir = "/etc/hadoop/conf"
-	hdfsUsername  = "ods"
-
-	// mysql
-	mysqlDsn = ""
-
-	// filter
-	dbBlackList = []string{
-		"stg_stream",
-	}
+	config *Config
 )
 
 // TODO 添加失败请求的 retry
 // TODO 改为多线程
 
+func loadConfig() error {
+	file, err := ioutil.ReadFile("config.yaml")
+	if err != nil {
+		return failure.Wrap(err)
+	}
+	return failure.Wrap(yaml.Unmarshal(file, &config))
+}
+
+func currentDate() time.Time {
+	now := time.Now()
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+}
+
 func main() {
+	// 读取配置文件
+	err := loadConfig()
+	if err != nil {
+		log.Fatal("读取配置文件失败: " + err.Error())
+	}
+
+	// 获取当前日期
+	date := currentDate()
+
 	// hive
 	hiveConnectConfiguration := gohive.NewConnectConfiguration()
-	hiveConnectConfiguration.Username = hiveUsername
-	hiveConnectConfiguration.Password = hivePassword
+	hiveConnectConfiguration.Username = config.Hive.Username
+	hiveConnectConfiguration.Password = config.Hive.Password
 
-	hiveConnection, err := gohive.ConnectZookeeper(hiveZookeeperQuorum, "NONE", hiveConnectConfiguration)
+	hiveConnection, err := gohive.ConnectZookeeper(config.Hive.Zookeeper.Quorum, "NONE", hiveConnectConfiguration)
 	if err != nil {
 		log.Fatal("创建 hive 连接失败: " + err.Error())
 	}
@@ -68,7 +107,7 @@ func main() {
 	defer hiveCursor.Close()
 
 	// hdfs
-	hadoopConf := hdfs.LoadHadoopConf(hadoopConfDir)
+	hadoopConf := hdfs.LoadHadoopConf(config.Hadoop.Conf.Dir)
 	namenodes, err := hadoopConf.Namenodes()
 	if err != nil {
 		log.Fatal("获取 NameNode 列表失败: " + err.Error())
@@ -76,7 +115,7 @@ func main() {
 
 	hdfsClient, err := hdfs.NewClient(hdfs.ClientOptions{
 		Addresses: namenodes,
-		User:      hdfsUsername,
+		User:      config.Hdfs.Username,
 	})
 	if err != nil {
 		log.Fatal("创建 hdfs 客户端失败: " + err.Error())
@@ -84,13 +123,9 @@ func main() {
 	defer hdfsClient.Close()
 
 	// mysql
-	db, err := gorm.Open(mysql.Open(mysqlDsn), &gorm.Config{})
+	db, err := gorm.Open(mysql.Open(config.Mysql.Dsn), &gorm.Config{})
 	if err != nil {
 		log.Fatal("创建 MySQL 连接失败: " + err.Error())
-	}
-	err = db.AutoMigrate(&Hive{})
-	if err != nil {
-		log.Fatal("自动创建 MySQL 表失败: " + err.Error())
 	}
 
 	// fetch
@@ -111,9 +146,10 @@ func main() {
 		}
 	}
 
+	// write to mysql
 	for _, entity := range entities {
-		fmt.Println(entity)
-		fmt.Println()
+		entity.Date = date
+		db.Create(entity)
 	}
 }
 
@@ -129,7 +165,7 @@ func fetch(hiveCursor *gohive.Cursor) ([]*Hive, error) {
 	}
 
 	for _, db := range dbs {
-		if inBlackList(db) {
+		if inBlacklist(db) {
 			continue
 		}
 
@@ -248,7 +284,6 @@ func getHdfsSize(client *hdfs.Client, location string) (size int64, err error) {
 		return
 	}
 	size = summary.Size()
-	fmt.Println(size)
 	return
 }
 
@@ -257,8 +292,8 @@ func parseHdfsLocation(location string) string {
 	return "/" + strings.SplitN(strings.Split(location, hdfsFlag)[1], "/", 2)[1] + "/"
 }
 
-func inBlackList(db string) bool {
-	for _, s := range dbBlackList {
+func inBlacklist(db string) bool {
+	for _, s := range config.Blacklist.Db {
 		if db == s {
 			return true
 		}

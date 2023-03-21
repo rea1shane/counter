@@ -1,0 +1,24 @@
+# hive
+hive:
+  username: ods
+  password:
+  zookeeper:
+    quorum: common1:2181,common2:2181,common3:2181
+
+# hdfs
+hdfs:
+  username: ods
+
+# hadoop
+hadoop:
+  conf:
+    dir: /etc/hadoop/conf
+
+# mysql
+mysql:
+  dsn:
+
+# filter
+blacklist:
+  db:
+    - stg_stream
